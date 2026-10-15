@@ -44,7 +44,8 @@ def ease(t):  # ease-in-out cúbico
 
 def encoder(saida, w, h):
     return subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}",
-                             "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", saida],
+                             "-r", str(FPS), "-i", "-", "-vf", "scale=out_color_matrix=bt709:out_range=tv,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+                             "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", saida],
                             stdin=subprocess.PIPE)
 
 

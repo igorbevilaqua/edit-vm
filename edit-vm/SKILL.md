@@ -196,7 +196,10 @@ Duas falas seguidas no mesmo layout, só se o visual trocar. Alterne o tempo tod
 
 ## 8. Som
 
-- Voz: highpass 80 Hz, compressor 3:1, loudnorm final em **−14 LUFS**, TP −1,5.
+- **Voz (no `preparar.sh`):** highpass 70 Hz → redução de ruído leve (`afftdn nr=8`) → compressor suave (3:1, threshold −32 dB, attack 12 ms, release 180 ms, knee 6) → **ganho linear** até −15 LUFS → limiter transparente (−1,5 dBFS).
+  - No teste real, o limiter atuou em só 1,4% do tempo e a dinâmica natural ficou preservada (LRA ~9).
+  - Não use `loudnorm` dinâmico para empurrar uma voz baixa (o iPhone grava em ~−29 LUFS) até −14: ele achata e estoura o som e sobe o ruído da sala.
+  - O que importa é a voz limpa e consistente. Se o usuário quiser mais volume, suba para −14 só no limiter final, sem comprimir mais.
 - Trilha de fundo contínua e tensa/jornalística a ~−20 dB da voz. Ela sai no punch e volta depois.
 - Inserção original: normalize o áudio para o mesmo volume percebido da voz do apresentador (sem saltos de volume). Aplique fade de 20 ms nas emendas internas para não estalar.
 - **SFX servem ao sentimento.** Use em transições e em elementos surgindo na tela, mas **sem exagero**. Antes de escolher, defina o **tom de cada bloco** no mapa do roteiro. O SFX nunca pode quebrar o que o vídeo está fazendo a pessoa sentir.
@@ -216,7 +219,17 @@ Duas falas seguidas no mesmo layout, só se o visual trocar. Alterne o tempo tod
 
 ## 9. Pipeline técnico
 
-1. **Proxy:** 1080×1920, 30 fps, h264 crf 14. Áudio a 48 kHz e a 16 kHz mono para a transcrição.
+1. **Preparar a gravação:** `scripts/preparar.sh GRAVACAO.MOV work/`. Gera:
+   - `proxy.mp4` (1080×1920, 30 fps, SDR **BT.709 marcado**);
+   - `voz.wav` (tratada, −15 LUFS);
+   - `voz16.wav` (para a transcrição);
+   - `cor.txt` (diagnóstico).
+
+   **Nunca leia a gravação original direto no render.**
+   - O iPhone grava em **HDR (HLG/BT.2020)**. Convertido para RGB sem tone mapping, o vídeo sai lavado e esbranquiçado.
+   - O script detecta o HDR e converte com o `avconvert` da Apple (o mesmo tone mapping do app Fotos) ou, fora do Mac, com `zscale+tonemap`.
+   - Se nenhum dos dois existir, ele para em vez de entregar a imagem lavada.
+   - Inserções baixadas (YouTube etc.) já são SDR BT.709.
 2. **Transcrição com tempo por palavra** da gravação **e das inserções originais** (para enxugá-las): veja `references/fontes.md` §5. Marque o que é FALA, INSTRUÇÃO ao editor (nunca entra), TAKE REPETIDO (fica o último limpo) e ERRO.
 3. **Mapa do roteiro:** para cada frase, defina bloco (hook/contexto/desenv./virada/CTA), **tom** (tenso/neutro/leve), layout, visual de cima, manchete (se houver), polo do contraste e SFX. Mostre esse mapa ao usuário **antes** de baixar material e renderizar.
 4. **Coleta de material** (`references/fontes.md`), nesta ordem:
@@ -230,8 +243,24 @@ Duas falas seguidas no mesmo layout, só se o visual trocar. Alterne o tempo tod
 
    Banco de imagens só como último recurso, avisando o usuário. Salve em `assets/` com um `fontes.json` (url, licença, crédito).
 5. **Cortes secos:** o início é o primeiro ponto com ≥30 ms acima de −44 dBFS antes da palavra, menos 35 ms. O fim é a última palavra mais o primeiro ponto com 100 ms abaixo de −46 dB, mais 60 ms. O vídeo do clipe dura exatamente o áudio.
-6. **Render:** Python (PIL + numpy) gera os frames por clipe → pipe rawvideo → ffmpeg libx264. Antes do render final, faça uma folha de contato com 3 frames por clipe.
-7. **Montagem:** concat → mix de áudio → loudnorm em 2 passes → entrega com crf 19 (~4–5 Mbps).
+6. **Render:** Python (PIL + numpy) gera os frames por clipe → pipe rawvideo → ffmpeg libx264.
+   - Na volta de RGB para vídeo, use a matriz e as tags de cor certas, senão a cor desvia:
+     `-vf scale=out_color_matrix=bt709:out_range=tv,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv -pix_fmt yuv420p`.
+   - Nada de `eq=brightness` chapado, fade lavado ou vinheta forte na imagem do apresentador. A cor já vem certa do `preparar.sh`.
+   - A correção que o script aplica é só a necessária (níveis, gama e saturação) e com base nas medidas do `cor.txt`.
+   - Fontes de terceiros com cores muito diferentes: ajuste só aquela inserção. Antes do render final, faça uma folha de contato com 3 frames por clipe.
+7. **Montagem:**
+   1. concat;
+   2. mix de áudio;
+   3. limiter final transparente;
+   4. entrega com crf 19 (~4–5 Mbps), também marcada como BT.709.
+
+   **Ordem do áudio:**
+   1. a voz já vem em −15 LUFS do `preparar.sh`;
+   2. trilha, SFX e inserções entram **relativos à voz**;
+   3. no fim, só um `alimiter=limit=0.84` de segurança.
+
+   **Nunca** rode loudnorm dinâmico no mix inteiro com SFX dentro. Ele bombeia a voz e estoura o som.
 8. **Ajustes:** re-renderize só os clipes afetados. Versione (`NOME_v1.mp4`, `v2`…) e nunca sobrescreva.
 
 ---
@@ -246,5 +275,8 @@ Duas falas seguidas no mesmo layout, só se o visual trocar. Alterne o tempo tod
    - rosto de pessoa comum sem borrão.
 2. Transcreva o áudio final: nenhuma instrução ao editor entrou e nenhuma frase perdeu o começo.
 3. Toda manchete na tela confere com o `fontes.json` (texto, veículo, data).
-4. Duração do áudio = duração do vídeo, **total ≤ 3:00**. Loudness −14 LUFS.
+4. Duração do áudio = duração do vídeo, **total ≤ 3:00**.
+   - Loudness −15 a −14 LUFS, pico ≤ −1 dBFS, sem clipping.
+   - O `ffprobe` do arquivo final mostra `color_transfer=bt709` (se mostrar `arib-std-b67`/`unknown`, a cor está errada).
+   - Compare um frame do final com o mesmo frame da gravação aberta no app Fotos: o tom de pele e a saturação têm de bater.
 5. Diga ao usuário o que você não consegue verificar (você não ouve o resultado) e o que ele deve conferir.
